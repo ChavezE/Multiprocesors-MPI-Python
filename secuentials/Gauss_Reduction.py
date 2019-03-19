@@ -9,27 +9,21 @@
 # 	if so, it is necesary to exange row.
 
 
-def gauss_reduce(matrix):
+def gauss_reduce(matrix, b):
 	N = len(matrix)
 	for k in range(N):
 		# Normalice pivot
 		for j in range(k+1,N):
 			matrix[k,j] = matrix[k,j] / matrix[k,k]
-		
-
-
-# for (k = 1; k <= N; k++)
-# 	//Normalize pivoting row
-# 	for (j = k+1; j <= N; j++)
-# 			A[k,j] = A[k,j] / A[k,k]
-# 	y[k] = b[k] / A[k,k]
-# 	A[k,k] = 1
-#  	//Reduce rows below pivot
-# 	for (i = k+1; i <= N; i++)
-# 			//Reduce columns after pivot
-# 			for (j = k+1; j <= N; j++)
-# 				A[i,j] = A[i,j] - A[i,k] * A[k,j]
-# 			b[i] = b[i] - A[i,k] * y[k]
+		y[k] = b[k] / A[k,k]
+		matrix[k,k] = 1
+ 		# Reduce rows below pivot
+		for i in range(k+1,N)
+			# Reduce columns after pivot
+			for j in range(k+1, N)
+				matrix[i,j] = matrix[i,j] - matrix[i,k] * matrix[k,j]
+			b[i] = b[i] - matrix[i,k] * y[k]
+			matrix[i,k] = 0
 
 if __name__ == '__main__':
 	gauss_reduce([[1,2,3], [4,5,6], [7,8,9]])
