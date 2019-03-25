@@ -30,7 +30,7 @@ def gaussReductionMPI():
         # TODO check if the len(sys.argv) has enough arguments, i.e. rows & cols
         # Rows & Cols are sent as a paramter through the CLI
         gaussMat = np.random.rand(totalRows, totalCols) * 10
-        gaussMat = np.around(gaussMat)
+        # gaussMat = np.around(gaussMat)
         # If rows is not a multiple of (world size - 1), send one more row until residual is zero
         residualApport = float(1/(worldSize-1)) 
         print("\n ===== INITIAL GAUSS MATRIX =====")
@@ -129,6 +129,7 @@ def gaussReductionMPI():
 
     if rank == TASK_MASTER:
         print("\n\n ===== FINAL GAUSS MATRIX =====")
+        gaussMat = np.around(gaussMat)
         print(gaussMat)
         # for r in gaussMat:
         #     print(r)
