@@ -1,170 +1,157 @@
 #!/usr/bin/env python
-
 """
+    -- Author:  
+        Emilio Chavez Madero, chaaveze@gmail.com
     --Description:
-    Multiplyes two matrices using mpi4py.
+        Multiplyes two matrices using mpi4py. 
+        Naive row distribution implementation.
 """
-
+# LIBRARIES
 from mpi4py import MPI
 import sys
 import numpy as np
 
-numberRows = int( sys.argv[1])
-numberColumns = int( sys.argv[2])
-TaskMaster = 0
+# GENERAL CONSTANTS
+MOCK_MATRIX_DATA = True
 
-assert numberRows == numberColumns
-
-
-a = np.zeros(shape=(numberRows, numberColumns))
-b = np.zeros(shape=(numberRows, numberColumns))
-c = np.zeros(shape=(numberRows, numberColumns))
-
-
-def populateMatrix( p ):
-    for processorID in range(0, numberRows):
-        for j in range(0, numberColumns):
-            p[processorID][j] = processorID+j
-
+# MPI DEFINITIONS
 comm = MPI.COMM_WORLD
 worldSize = comm.Get_size()
 rank = comm.Get_rank()
 processorName = MPI.Get_processor_name()
+TASK_MASTER = 0
 
-#print ("Process %d started.\n" % (rank))
+# Method for TASK_MASTER
+def sendWorkToProcess(mat_a):
+    print("Sending work")
 
-# All processors need having the second matrix
-# TODO 
-# send this matrix by some clean way to function like use
-populateMatrix(b)
+    num_rows, num_cols = mat_a.shape
 
-comm.Barrier()
+    # CALCULATE NUMBER OF ROWS PER WORKER
+    rowsToComputePerP = int(num_rows / (worldSize-1))
 
-# TASK MASTER PROCESOR SHOULD THEN THE SECOND MATRIX TO 
-# OTHERS PROCESORS AND THEN RETRIEVE THE CALCULATIONS
-if rank == TaskMaster:
-    def sendWorkToProcess():
-        #print ("Initialising Matrix A and B (%d,%d).\n" % (numberRows, numberColumns))
-        print ("Start")
-
-        # Matrix a will be splited into workers
-        populateMatrix(a)
-        print (a)
-
-        """
-        Sending criteria
-
-        each process will calulate 
-            rowsPerP = numberRows/(woldsize - 1)
-        rows_per_process = 
-        [0]     [ . . . . . ]   lower_bound
-        [1]     [ . . . . . ]   upper_bound
-        [2]     [ . . . . . ]
-        [.]     [ . . . . . ]
-        [.]     [ . . . . . ]
-        [.]     [ . . . . . ]
-        [n]     [ . . . . . ]
-
-        NOTE -> THE LAST PROCESSOR WILL HANDLE THE MODULE OF THE DIVISION
-
-        """
-        # CALCULATE NUMBER OF ROWS PER WORKER
-        rowsToComputePerP = numberRows / (worldSize-1) 
-
-        # SENT ROWS TO PROCESS
-        for processorID in range(1, worldSize):
-            rowsOffset = (processorID-1)*rowsToComputePerP 
-            print ("rowsOffset is {}".format(rowsOffset))
-
-            # SEND HOW MANY ROWS AND WHAT OFFSET EACH PROCESS WILL DO
-            # TODO: MAKE MORE EFFICIENT
-            comm.send(rowsToComputePerP, dest=processorID, tag=processorID)
-            comm.send(rowsOffset, dest=processorID, tag=processorID)
-
-            # send corresponding rows to Processors
-            for j in range(0, rowsToComputePerP):
-                rowIndex = j + rowsOffset
-                print ("\t sending {} to {} with tag {}".format(a[rowIndex,:], processorID, rowIndex))
-                comm.Send([a[rowIndex,:], MPI.INT], dest=processorID, tag=rowIndex)
-        
-        #print ("All sent to workers.\n")
-
-    # CALL FUNCTION TO DISTRIBUTE WORK
-    sendWorkToProcess()
-
-# AT THIS POINT ALL WORK HAS BEEN SENT 
-comm.Barrier()
-
-if rank != TaskMaster:
-    def receiveRowsAndComputeWork():
-        #print ("Data Received from process %d.\n" % (rank))
-        # offset = comm.recv(source=0, tag=rank)
-        # recev_data = comm.recv(source=0, tag=rank)
-
-        rowsToCompute = comm.recv(source=TaskMaster, tag=rank)
-        rowsOffset = comm.recv(source=TaskMaster, tag=rank)
-
-        
-        recev_data = []
-        # RECEIVE ROWS AND STACK THEM 
-        for j in range(0, rowsToCompute):
-            rowIndex = j + rowsOffset
-            c = np.empty(shape=numberColumns)
-            comm.Recv([c, MPI.INT],source=TaskMaster, tag=rowIndex)
-            recev_data.append(c)
-            
-        
-        print ("procesor {}, has the recev_data {}".format(rank, recev_data))
-        #print ("Start Calculation from process %d.\n" % (rank))
-
-        #Loop through rows
-        # t_start = MPI.Wtime()
-        # for row_num in range(0, rowsToCompute):
-        #     res = np.zeros(shape=(numberColumns))
-        #     if (rowsToCompute == 1):
-        #         r = recev_data
-        #     else:
-        #         r = recev_data[row_num,:]
-
-        #     for j in range(0, numberColumns):
-        #         # GET COLUMN FROM B
-        #         q = b[:,j]
-        #         for x in range(0, numberColumns):
-        #             res[j] = res[j] + (r[x]*q[x])
-
-        #     if (row_num > 0):
-        #         send = np.vstack((send, res))
-        #     else:
-        #         send = res
-        # t_diff = MPI.Wtime() - t_start
-        
-        # print("Process %d finished in %5.4fs.\n" %(rank, t_diff))
-        # #Send large data
-        # #print ("Sending results to Master %d bytes.\n" % (send.nbytes))
-        # comm.Send([send, MPI.FLOAT], dest=0, tag=rank) #1, 12, 23
+    # Missing values will be handled by the last procesor
+    # TODO: implement better load balance, however this wont affec the result
+    residualWork = num_rows % (worldSize-1)
     
-    # CALL FUNCTION TO RECEIVE WORK AND COMPUTE IT
-    receiveRowsAndComputeWork()
+    # SENT ROWS TO EACH WORKER
+    for processorID in range(1, worldSize):
+        rowsOffset = (processorID-1)*rowsToComputePerP
 
-comm.Barrier()
+        # LAST PROCESOR WILL HANDLE THE RESIDUAL
+        if (processorID == worldSize -1):
+            rowsToComputePerP = rowsToComputePerP + residualWork
 
-# if rank == TaskMaster:  
-#     #print ("Checking response from Workers.\n")
-#     res1 = np.zeros(shape=(rowsToCompute, numberColumns))
-#     comm.Recv([res1, MPI.FLOAT], source=1, tag=1)
-#     #print ("Received response from 1.\n")
-#     kl = np.vstack((res1))
-#     for processorID in range(2, worldSize):
-#         resx= np.zeros(shape=(rowsToCompute, numberColumns))
-#         comm.Recv([resx, MPI.FLOAT], source=processorID, tag=processorID)
-#         #print ("Received response from %d.\n" % (processorID))
-#         kl = np.vstack((kl, resx))
-#     print ("End")
-#     print ("Result AxB.\n")
-#     print (kl)   
+        # SEND HOW MANY ROWS AND WHAT OFFSET EACH PROCESS WILL DO
+        comm.send(rowsToComputePerP, dest=processorID, tag=processorID)
+        
+        # SEND THE OFFSET SO PROCESOR CAN COMPUTE PROPER INDEX
+        comm.send(rowsOffset, dest=processorID, tag=processorID)
 
-comm.Barrier()
+        # SEND ROWS
+        for j in range(0, rowsToComputePerP):
+            rowIndex = j + rowsOffset
+            comm.Send([mat_a[rowIndex, :], MPI.INT], dest=processorID, tag=rowIndex)
 
+# Method for workers
+def receiveRowsAndComputeWork(mat_b):
+    num_rows, num_cols = mat_b.shape
+    # print ("Mat B shape : {},{}".format(num_rows,num_cols))
 
+    rowsToCompute = comm.recv(source=TASK_MASTER, tag=rank)
+    rowsOffset = comm.recv(source=TASK_MASTER, tag=rank)
 
+    recev_data = []
+    # RECEIVE ROWS AND STACK THEM
+    for j in range(0, rowsToCompute):
+        rowIndex = j + rowsOffset
+        c = np.empty(shape=num_cols)
+        comm.Recv([c, MPI.INT], source=TASK_MASTER, tag=rowIndex)
+        recev_data.append(c)
 
+    # print("procesor {}, has the recev_data {}".format(rank, recev_data))
+
+    # PREPARE RESPONSE OBJECT
+    response = []
+
+    # LOOP AND PROCESS CORRESPONDING COLUMNS
+    t_start = MPI.Wtime()
+    for row_num in range(0, rowsToCompute):
+        r = recev_data[row_num]
+
+        row_result = []
+        # MULTIPLY ROW BY COLUMN
+        for j in range(0, num_cols):
+            mult_result = 0
+            # GET COLUMN FROM MATRIX B
+            q = mat_b[:, j]
+
+            for x in range(0, num_rows):
+                mult_result = mult_result + (r[x]*q[x])
+            
+            # print ("Added {} to the row result".format(mult_result))
+            row_result.append(mult_result)
+
+        response.append(row_result)
+
+    comm.send(response, dest=TASK_MASTER, tag=rank)
+
+# Method to carry out the multiplication
+def matrixMultiply(row_num, col_num, printExpexted=False):
+    # LET ALL PROCESSORS HAVE A COPUY OF THE SECOND MATH
+    mat_b = retrieveMatrix(row_num, col_num)
+
+    #####################################################
+    #               DISTRIBUTE  WORK                    #
+    #####################################################
+    if rank == TASK_MASTER:
+        mat_a = retrieveMatrix(row_num,col_num)
+
+        if (printExpexted):
+            print ("Expected result is")
+            print (np.matmul(mat_a,mat_b))
+        
+        # CALL FUNCTION TO DISTRIBUTE WORK
+        sendWorkToProcess(mat_a)
+        print("Work sent")
+
+    #####################################################
+    #               WORKERS COMPUTE                    #
+    #####################################################
+    if rank != TASK_MASTER:
+        receiveRowsAndComputeWork(mat_b)
+
+    #####################################################
+    #               GATHER AND REDUCE                   #
+    #####################################################
+    if rank == TASK_MASTER:
+        print("Work received")
+
+        result = []
+        for processorID in range(1, worldSize):
+            row_result = comm.recv(source=processorID, tag=processorID)
+            result.append(row_result)
+
+        print("End")
+        print("Result AxB.\n")
+        print(result, end='\n')
+
+# Method for grabing the matrix to multiply
+def retrieveMatrix(row_num, col_num):
+    def populateMatrix(matrix, rows, cols):
+        for r in range(0, rows):
+            for j in range(0, cols):
+                matrix[r][j] = r+j
+    
+    if MOCK_MATRIX_DATA:
+        # Create a mock mat and fill it
+        mock_mat = np.zeros(shape=(row_num, col_num))
+        populateMatrix(mock_mat,row_num, col_num)
+    
+        return mock_mat
+
+if __name__ == "__main__":
+    rows = int(sys.argv[-2])
+    cols = int(sys.argv[-1])
+    
+    matrixMultiply(rows, cols)
