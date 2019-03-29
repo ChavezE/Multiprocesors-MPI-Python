@@ -7,142 +7,132 @@ from math import sqrt
 import sys
 
 # ===== GLOBAL VARIABLES =====
-comm = MPI.COMM_WORLD
-rank = comm.Get_rank()
-worldSize = comm.Get_size()
+COMM = MPI.COMM_WORLD
+RANK = COMM.Get_rank()
+WORLD_SIZE = COMM.Get_size()
 TASK_MASTER = 0
 # ============================
 
 
-def floydWarshallOptimization(M, kRow, kCol):
-    # M is a matrix with the costs of going through each road
-    N = M.shape[0]
-    for i in range(N):
-        for j in range(N):
-            M[i][j] = min(M[i][j], kCol[i] + kRow[j])
-    
-    # print(M) 
 
-def createMatrix(N):
-    rawMat = np.random.uniform(0, 100, (N,N))
+def Create_Matrix(N):
+    rawMat = np.random.uniform(1, 100, (N,N))
     roundedMat = np.round(rawMat, decimals=2)
+
+    # Create 0's on the main diagonal
+    for i in range(N):
+        roundedMat[i,i] = 0
+
+    print("\n Initial Mat is: ")
+    print(roundedMat)
     return roundedMat
 
-def distributeMat(Mat):
-    sizeOfMat = Mat.shape
-    sizeOfSubMatrix = int(sizeOfMat[0] / sqrt(worldSize))
-    rankOfProcessor = 0
-    TMData = {}
+def Distribute_Sub_Matrices(rowsPerProcessor, remainingRows, Mat):
+    lowerBound = 0
+    returnSubMat = None
+    limitsPerProcessor = np.zeros(Mat.shape[0])
 
-    for xOffset in range(0, sizeOfMat[0], sizeOfSubMatrix):
-        for yOffset in range(0, sizeOfMat[1], sizeOfSubMatrix):
-            # Compute the submatrix using offsets
-            thisMat = Mat[xOffset:xOffset+sizeOfSubMatrix, yOffset:yOffset+sizeOfSubMatrix]
-            initX = xOffset
-            initY = yOffset
+    for thisRank in range(WORLD_SIZE):
+        if thisRank == TASK_MASTER:
+            upperBound = lowerBound + rowsPerProcessor + remainingRows
+            returnSubMat = Mat[lowerBound:upperBound]
+        else:
+            upperBound = lowerBound + rowsPerProcessor
+            sendSubMat = Mat[lowerBound:upperBound]
             data = {
-                'mat': thisMat,
-                'x', initX,
-                'y', initY
+                "subMat" : sendSubMat,
+                "lowerBound" : lowerBound
             }
-            if rankOfProcessor == TASK_MASTER:
-                TMData = data
-            else:
-                comm.send(data, dest=rankOfProcessor, tag=rankOfProcessor)
-            rankOfProcessor += 1
+            COMM.send(data, dest=thisRank, tag=thisRank)
+
+        lowerBound = upperBound
+        limitsPerProcessor[thisRank] = lowerBound
+
+    return returnSubMat, limitsPerProcessor
+
+def Kth_Row_Is_Mine(bcastRoot):
+    return RANK == bcastRoot
+
+def Kth_Floyd_Optimization(k, thisKthRow, subMat):
+    # M is a matrix with the costs of going through each road
+    rows, cols = subMat.shape
+
+    for i in range(rows):
+        for j in range(cols):
+            subMat[i,j] = min(subMat[i,j], subMat[i,k] + thisKthRow[j])
     
-    # Return the submatrix to Task Master
-    return TMData
+    return subMat
 
-def computeSlicesOfK(M, initX, initY, k):
-    lengthOfM = M.shape[0]
-    kthRowSlice = None
-    kthColSlice = None
+def floyds_shortest_paths(graph):
+    N = graph.shape[0]
+    for k in range(N):
+        for i in range(N):
+            for j in range(N):
+                graph[i,j] = min(graph[i,j],graph[i,k] + graph[k,j])
 
-    if k >= initX and k < initX + lengthOfM:
-        kthRowSlice = M[k,:]
-    if k >= initY and k < initY + lengthOfM:
-        kthColSlice = M[:,k]
-    
-    return kthRowSlice, kthColSlice
+    return graph
 
-
-def floydAlgorithm(sizeOfMat):
+def Parallel_Floyd_Warshall(sizeOfMat):
     # The matrix used on the Floyd Washall algorithm is always square
 
-    # (I) == Distribute the Matrix from the Task Master to the remaining processors ==
-    if rank == TASK_MASTER:
-        weightsMatrix = createMatrix(sizeOfMat)
-        # print("== Original Weights Matrix ==")
-        # print(weightsMatrix)
-        
-        # Distribute the Matrix in N/sqrt(worldSize) x N/sqrt(worldSize) matrices
-        data = distributeMat(weightsMatrix)
-        initX = data['x']
-        initY = data['y']
-        thisMat = data['mat']
-        # print("From rank {} ==> {}".format(rank, thisMat))
-    
-    # (II) == Each Processor that isn't the task master receives its own subMatrix ==
-    if rank != TASK_MASTER:
-        # Receive its corresponding submatrix, e.g. if sizeOfMat = 4 ==> submatrix is of 2x2
-        data = comm.recv(source=TASK_MASTER, tag=rank)
-        initX = data['x']
-        initY = data['y']
-        thisMat = data['mat']
+    # (I.a) == Create & Distribute Matrix within ALL processors ==
+    if RANK == TASK_MASTER:
+        Mat = Create_Matrix(sizeOfMat)
+        rowsPerProcessor = int(sizeOfMat / WORLD_SIZE)
+        remainingRows = sizeOfMat % WORLD_SIZE
 
-        # print("From rank {} ==> {}".format(rank, thisMat))
-
-    comm.Barrier()
-    # (III) == Loop for each value of k to compute the shortest paths ==
-
-    # ==> Iterate range(0 to k); bcast kRow and/or kCol slices
-    # TODO create a function, bcause this will be called from either ...
-    # ... TASK MASTER and the other processors
-    for k in range(0, sizeOfMat):
-        # These two arrays are placeholders to be used in future steps
-        kRow = None
-        kColumn = None
-        # a. If I have some slice of kthRow or kthColumn, broadcast it to all other processors
-        kRowSlice, kColSlice = computeSlicesOfK(thisMat, initX, initY, k)
-
-        # a.1 Arrange the data to be sent
-        # TODO move this section into a function
-        rowData2 = None
-        colData2 = None
-
-        if kRowSlice != None:
-            rowData1 = {
-                "row_slice": kRowSlice,
-                "x": initX
-            }
-        else:
-            rowData1 = None
-
-        if kColSlice != None:
-            colData1 = {
-                "col_slice": kColSlice,
-                "x": initY
-            }
-        else:
-            colData1 = None
-
-        rowData1 = comm.bcast(rowData1, )
-
-        # b. Recevie the slices of kthRow and kthColumn that I don't have
+        # Distribute the matrix
+        subMat, limitsPerProcessor = Distribute_Sub_Matrices(rowsPerProcessor, remainingRows, Mat)
+        lowerBound = 0
+        upperBound = subMat.shape[0]
         
 
-        # c. Arrange the slices to build up the final kthRow and kthColumn
+    # (I.b) == Receive my submatrix, if RANK != TASK_MASTER
+    if RANK != TASK_MASTER:
+        data = COMM.recv(source=TASK_MASTER, tag=RANK)
+        subMat = data["subMat"]
+        lowerBound = data["lowerBound"]
+        upperBound = lowerBound + subMat.shape[0]
+        limitsPerProcessor = None
 
-        # d. Call the function floydWarshallOptimization() for the kth time
-        # TODO verify that Python handles the Matrices as reference parameters
-        floydWarshallOptimization(thisMat, kRow, kCol)
+    limitsPerProcessor = COMM.bcast(limitsPerProcessor, root=0)
+    # print("\n == From rank {}, the subMat BEFORE is: {}".format(RANK, subMat))
 
-    
+    # (II) == Iterate from k --> {0,N} to optimize subMat ==
+    bcastRoot = 0 # Pointer to limitsPProcessor to define the bcast root
+    for k in range(sizeOfMat):
 
+        # Check if its time for the (bcastRoot+1) processor to bcast
+        if k >= limitsPerProcessor[bcastRoot]:
+            bcastRoot += 1
 
+        # Check if KthRow is within my limits
+        if Kth_Row_Is_Mine(bcastRoot):
+            thisKthRow = subMat[k-lowerBound]
+        else: 
+            thisKthRow = None
+
+        thisKthRow = COMM.bcast(thisKthRow, root=bcastRoot)
+        subMat = Kth_Floyd_Optimization(k, thisKthRow, subMat)
+
+        COMM.Barrier()
+        
+
+    # (III) == Send subMats back to TASK_MASTER to create the finalMat
+    if RANK != TASK_MASTER:
+        COMM.send(subMat, dest=TASK_MASTER, tag=RANK)
+    if RANK == TASK_MASTER:
+        finalMat = subMat
+        for thisRank in range(1, WORLD_SIZE):
+            thisSubMat = COMM.recv(source=thisRank, tag=thisRank)
+            finalMat = np.concatenate((finalMat, thisSubMat))
+
+        print("\n Final Mat is: ")
+        print(finalMat)
+        
+        
 
 if __name__ == "__main__":
-    N = 4
-    floydAlgorithm(N)
+    N = int(sys.argv[-1])
+    Parallel_Floyd_Warshall(N)
     
